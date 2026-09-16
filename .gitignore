@@ -1,0 +1,18 @@
+# dependencies and builds
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+
+# secrets (API keys live here)
+.env
+engine/.env
+
+# lead data: real businesses' contacts never go to GitHub
+data/
+*.db
+*.db-shm
+*.db-wal
+web/public/data/
+*.csv
