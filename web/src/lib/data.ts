@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { EmailStatus, EngineSearch, Lead, LeadsFile, OutreachStatus, SourceHealth } from "./types";
+import type { AgentPlan, ApiKey, EmailStatus, EngineSearch, Lead, LeadsFile, OutreachStatus, ResearchJob, SourceHealth } from "./types";
 
 /* ------------------------------------------------------------------ labels */
 
@@ -60,11 +60,13 @@ export const SOURCE_GROUPS: { group: string; items: { name: string; what: string
     ],
   },
   {
-    group: "Signals & checks",
+    group: "Signals, email & AI",
     items: [
       { name: "Meta Ad Library", what: "Running Facebook/Instagram ads now" },
       { name: "Trustpilot", what: "Rating and complaints you can fix" },
+      { name: "Hunter", what: "Emails for the domain (your key)" },
       { name: "Email check", what: "Mail server confirms the mailbox" },
+      { name: "AI agent", what: "Researches top leads: owner, email, angle" },
     ],
   },
 ];
@@ -96,7 +98,12 @@ export const engine = {
   runSearch: (id: string) => api<{ started: boolean }>(`/api/searches/${id}/run`, { method: "POST" }),
   deleteSearch: (id: string) => api<{ deleted: boolean }>(`/api/searches/${id}`, { method: "DELETE" }),
   sources: () => api<{ health: Record<string, SourceHealth>; testing: boolean }>("/api/sources"),
-  testSources: () => api<{ started: boolean }>("/api/sources/test", { method: "POST" }),
+  testSources: (only?: string[]) => api<{ started: boolean }>("/api/sources/test", { method: "POST", body: JSON.stringify({ only: only ?? null }) }),
+  keys: () => api<{ keys: ApiKey[]; search_engine: string; agent: boolean }>("/api/keys"),
+  saveKey: (name: string, value: string) => api<{ saved: boolean; testing: string[] }>("/api/keys", { method: "PUT", body: JSON.stringify({ name, value }) }),
+  plan: (request: string) => api<AgentPlan>("/api/agent/plan", { method: "POST", body: JSON.stringify({ request }) }),
+  research: (id: string) => api<{ started: boolean }>(`/api/leads/${id}/research`, { method: "POST" }),
+  researchStatus: (id: string) => api<ResearchJob>(`/api/leads/${id}/research`),
 };
 
 /** Engine status, polled. `running` lists search ids in progress. */

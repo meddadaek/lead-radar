@@ -6,8 +6,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import db, health, pipeline
+from . import agent, db, health, keys, llm, pipeline
+from .http import Blocked, NeedsKey
 from .known import archive
+from .sources import websearch
 
 
 @asynccontextmanager
@@ -81,6 +83,71 @@ def get_sources():
     return {"health": db.health(), "testing": health.is_running()}
 
 
+class TestIn(BaseModel):
+    only: list[str] | None = None
+
+
 @app.post("/api/sources/test")
-def test_sources():
-    return {"started": health.start()}
+def test_sources(body: TestIn | None = None):
+    return {"started": health.start(body.only if body else None)}
+
+
+# ---------------------------------------------------------------- API keys (values never leave this machine)
+
+@app.get("/api/keys")
+def get_keys():
+    return {"keys": keys.status(), "search_engine": websearch.engine_name(), "agent": llm.available()}
+
+
+class KeyIn(BaseModel):
+    name: str
+    value: str = ""
+
+
+@app.put("/api/keys")
+def put_key(body: KeyIn):
+    try:
+        keys.save(body.name, body.value)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    affected = next((k["unlocks"] for k in keys.KEYS if k["name"] == body.name), [])
+    if body.value:
+        health.start(affected)
+    return {"saved": True, "testing": affected if body.value else []}
+
+
+# ---------------------------------------------------------------- AI agent
+
+class PlanIn(BaseModel):
+    request: str = Field(min_length=4, max_length=600)
+
+
+def _agent_error(e: Exception):
+    if isinstance(e, NeedsKey):
+        raise HTTPException(400, str(e)) from e
+    if isinstance(e, Blocked):
+        raise HTTPException(429, str(e)) from e
+    raise HTTPException(500, f"Agent failed: {e}") from e
+
+
+@app.post("/api/agent/plan")
+def agent_plan(body: PlanIn):
+    try:
+        return agent.plan(body.request)
+    except Exception as e:  # noqa: BLE001
+        _agent_error(e)
+
+
+@app.post("/api/leads/{lead_id}/research")
+def research_lead(lead_id: str):
+    try:
+        return {"started": agent.start(lead_id)}
+    except KeyError as e:
+        raise HTTPException(404, "Lead not found") from e
+    except Exception as e:  # noqa: BLE001
+        _agent_error(e)
+
+
+@app.get("/api/leads/{lead_id}/research")
+def research_status(lead_id: str):
+    return agent.status(lead_id) or {"state": "idle", "steps": []}

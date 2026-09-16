@@ -9,8 +9,9 @@ import { useEngineStatus, useLeads, useLeadsFile } from "./lib/data";
 import { Leads, NO_FILTERS, type Filters } from "./pages/Leads";
 import { Overview } from "./pages/Overview";
 import { Searches } from "./pages/Searches";
+import { Settings } from "./pages/Settings";
 
-const PAGES: Page[] = ["overview", "leads", "searches"];
+const PAGES: Page[] = ["overview", "leads", "searches", "settings"];
 
 function readHash(): Page {
   const h = window.location.hash.replace(/^#\/?/, "") as Page;
@@ -105,14 +106,15 @@ export default function App() {
               >
                 {page === "overview" && <Overview file={file} leads={leads} onFilter={filterAndGo} onOpen={setOpenId} onNavigate={navigate} />}
                 {page === "leads" && <Leads leads={leads} filters={filters} setFilters={setFilters} onOpen={setOpenId} onNavigate={navigate} />}
-                {page === "searches" && <Searches leads={leads} running={status.running} onLeadsChanged={reload} />}
+                {page === "searches" && <Searches leads={leads} running={status.running} onLeadsChanged={reload} onNavigate={navigate} />}
+                {page === "settings" && <Settings />}
               </motion.div>
             </AnimatePresence>
           )}
         </Shell>
       )}
 
-      <LeadDrawer lead={leads.find((l) => l.id === openId) ?? null} onClose={closeDrawer} />
+      <LeadDrawer lead={leads.find((l) => l.id === openId) ?? null} onClose={closeDrawer} onChanged={reload} />
       <CommandPalette open={palette} onClose={closePalette} leads={leads} onOpenLead={setOpenId} onNavigate={navigate} onHotLeads={hotLeads} />
     </>
   );

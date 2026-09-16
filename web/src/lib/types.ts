@@ -86,6 +86,31 @@ export interface Lead {
   domain?: { domain: string; registered?: string; first_archived?: string } | null;
   trustpilot?: { url: string; score: number | null; reviews: number | null; complaints: string[] } | null;
   profiles?: Record<string, string>;
+  instagram?: { url: string; username?: string; followers?: number; following?: number; posts?: number; bio?: string; category?: string | null; via?: string } | null;
+  angle?: string;
+  agent?: { researched_at: string; model: string; evidence: string[] };
+}
+
+export interface ApiKey {
+  name: string;
+  label: string;
+  free: string;
+  url: string;
+  unlocks: string[];
+  set: boolean;
+  hint: string;
+}
+
+export interface AgentPlan {
+  searches: { niche: string; location: string; country: string; limit: number; why: string }[];
+  notes: string;
+  model: string;
+}
+
+export interface ResearchJob {
+  state: "idle" | "running" | "done" | "error";
+  steps: { ts: string; kind: string; text: string }[];
+  error?: string | null;
 }
 
 export interface LeadsFile {

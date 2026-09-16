@@ -1,9 +1,10 @@
-import { Activity, Check, ExternalLink, Play, RotateCw, Trash2, X } from "lucide-react";
+import { Activity, Check, ExternalLink, Play, RotateCw, Sparkles, Trash2, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Page } from "../components/Shell";
 import { Button, EASE, GlowCard, Hud, Pill } from "../components/ui";
 import { ALL_SOURCES, COUNTRIES, SOURCE_GROUPS, engine, fmt, timeAgo } from "../lib/data";
-import type { EngineSearch, HealthStatus, Lead, SourceHealth } from "../lib/types";
+import type { AgentPlan, EngineSearch, HealthStatus, Lead, SourceHealth } from "../lib/types";
 
 const field = "h-11 w-full rounded-xl border border-line bg-black/25 px-3.5 text-[14px] outline-none transition placeholder:text-faint focus:border-accent/50 focus:shadow-[0_0_28px_-12px_var(--accent)]";
 
@@ -21,7 +22,9 @@ const STEP_LABEL: Record<string, string> = {
   enrich: "Checking contacts & enriching", done: "Finished",
 };
 
-export function Searches({ leads, running, onLeadsChanged }: { leads: Lead[]; running: string[]; onLeadsChanged: () => void }) {
+export function Searches({
+  leads, running, onLeadsChanged, onNavigate,
+}: { leads: Lead[]; running: string[]; onLeadsChanged: () => void; onNavigate: (p: Page) => void }) {
   const [searches, setSearches] = useState<EngineSearch[]>([]);
   const [health, setHealth] = useState<Record<string, SourceHealth>>({});
   const [testing, setTesting] = useState(false);
@@ -93,6 +96,21 @@ export function Searches({ leads, running, onLeadsChanged }: { leads: Lead[]; ru
           Type a niche and a place. The engine discovers the businesses, reads their websites, confirms each email with its mail server and each phone number, enriches them, and skips everyone from past campaigns.
         </p>
       </motion.div>
+
+      <AgentPlanner
+        onNavigate={onNavigate}
+        onRun={async (plan) => {
+          setError("");
+          try {
+            for (const s of plan) {
+              await engine.createSearch({ niche: s.niche, location: s.location, country: s.country, limit: s.limit, sources: ALL_SOURCES.filter((x) => sources.has(x)) });
+            }
+            await loadSearches();
+          } catch (err) {
+            setError((err as Error).message);
+          }
+        }}
+      />
 
       <form
         onSubmit={async (e) => {
@@ -239,6 +257,89 @@ export function Searches({ leads, running, onLeadsChanged }: { leads: Lead[]; ru
   );
 }
 
+function AgentPlanner({ onRun, onNavigate }: { onRun: (plan: AgentPlan["searches"]) => Promise<void>; onNavigate: (p: Page) => void }) {
+  const [request, setRequest] = useState("");
+  const [plan, setPlan] = useState<AgentPlan | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [ready, setReady] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    engine.keys().then((k) => setReady(k.agent)).catch(() => setReady(false));
+  }, []);
+
+  return (
+    <GlowCard className="mt-6" kicker="AI agent" title="Just describe who you want"
+      hint="The agent turns your request into searches: the right local-language business word, the cities to cover, how many leads. You check the plan, then run it.">
+      <div className="px-5 pb-5 pt-4">
+        {ready === false ? (
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-violet/30 bg-violet/[0.06] px-4 py-3 text-[13px]">
+            <Sparkles className="h-4 w-4 text-violet" />
+            <span className="flex-1 text-muted">The agent needs a free Groq key (and a Tavily key for its web research).</span>
+            <Button onClick={() => onNavigate("settings")}>Add keys</Button>
+          </div>
+        ) : (
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (request.trim().length < 4) return;
+              setBusy(true);
+              setError("");
+              setPlan(null);
+              try {
+                setPlan(await engine.plan(request.trim()));
+              } catch (err) {
+                setError((err as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+            className="flex flex-col gap-3 sm:flex-row"
+          >
+            <input
+              value={request}
+              onChange={(e) => setRequest(e.target.value)}
+              placeholder="e.g. dental clinics in the 5 biggest cities of France that probably have no online booking"
+              className={`${field} flex-1`}
+            />
+            <Button variant="primary" type="submit" disabled={busy || request.trim().length < 4}>
+              {busy ? <RotateCw className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+              {busy ? "Planning…" : "Plan searches"}
+            </Button>
+          </form>
+        )}
+        {error && <p className="mt-3 text-xs text-bad">{error}</p>}
+        <AnimatePresence>
+          {plan && (
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-4">
+              {plan.notes && <p className="mb-3 text-[12.5px] text-muted">{plan.notes}</p>}
+              <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                {plan.searches.map((s, i) => (
+                  <motion.li key={i} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.06 }}
+                    className="rounded-xl border border-line bg-black/20 px-3 py-2.5">
+                    <div className="text-[13.5px] font-medium">{s.niche} <span className="text-faint">in</span> {s.location}, {COUNTRIES[s.country] ?? s.country}</div>
+                    <div className="mt-0.5 text-[11px] text-faint">{s.limit} leads · {s.why}</div>
+                  </motion.li>
+                ))}
+              </ul>
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <span className="font-mono text-[10.5px] text-faint">planned by {plan.model}</span>
+                <div className="flex gap-2">
+                  <Button onClick={() => setPlan(null)}>Discard</Button>
+                  <Button variant="primary" disabled={!plan.searches.length || busy}
+                    onClick={async () => { setBusy(true); await onRun(plan.searches); setBusy(false); setPlan(null); setRequest(""); }}>
+                    <Play className="h-3.5 w-3.5" /> Run {plan.searches.length} searches
+                  </Button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </GlowCard>
+  );
+}
+
 function SearchCard({ s, onChange, onError }: { s: EngineSearch; onChange: () => void; onError: (m: string) => void }) {
   const p = s.progress || {};
   const live = s.running || s.state === "running";
@@ -352,7 +453,7 @@ function SearchCard({ s, onChange, onError }: { s: EngineSearch; onChange: () =>
             <motion.div
               key={e.ts + e.message}
               initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }}
-              className={`flex gap-2 py-[3px] ${e.level === "lead" ? "text-accent-text" : e.level === "warn" || e.level === "error" ? "text-warn" : e.level === "skip" ? "text-faint" : e.level === "done" ? "text-good" : "text-muted"}`}
+              className={`flex gap-2 py-[3px] ${e.level === "lead" ? "text-accent-text" : e.level === "agent" ? "text-violet" : e.level === "warn" || e.level === "error" ? "text-warn" : e.level === "skip" ? "text-faint" : e.level === "done" ? "text-good" : "text-muted"}`}
             >
               <span className="shrink-0 text-faint">{new Date(e.ts).toLocaleTimeString("en-GB", { hour12: false })}</span>
               <span className="break-words">{e.message}</span>

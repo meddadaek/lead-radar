@@ -1,13 +1,13 @@
-"""Web search through Brave Search in the shared headless browser.
+"""Web search: Tavily when its key is set (reliable, supports domain filters), otherwise Brave in the browser.
 
-Plain HTTP requests get rate-limited by Brave (429) and Bing serves decoy
-results to scripts, so searches run in the real browser, one at a time with a
-pause. A human-check page raises Blocked so the UI can say so.
+Brave needs no key but tolerates little volume and ignores `site:`, so domain
+filters become plain keywords there and results are filtered by host afterwards.
 """
 import re
 import urllib.parse
 
 from ..http import Blocked, Throttle
+from . import tavily
 from .browser import browser
 
 _throttle = Throttle(4.0)
@@ -30,8 +30,21 @@ _EXTRACT = """() => {
 }"""
 
 
-def search(query: str, country: str = "", count: int = 10) -> list[dict]:
-    url = "https://search.brave.com/search?source=web&q=" + urllib.parse.quote(query)
+def engine_name() -> str:
+    return "Tavily" if tavily.available() else "Brave (no key)"
+
+
+def _on_domain(url: str, domains: list[str]) -> bool:
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
+def search(query: str, country: str = "", count: int = 10, domains: list[str] | None = None) -> list[dict]:
+    if tavily.available():
+        return tavily.search(query, domains, max_results=min(count, 20))
+
+    q = query + (" " + " ".join(d.split(".")[0] for d in domains) if domains else "")
+    url = "https://search.brave.com/search?source=web&q=" + urllib.parse.quote(q)
     if country:
         url += "&country=" + country.lower()
 
@@ -40,7 +53,7 @@ def search(query: str, country: str = "", count: int = 10) -> list[dict]:
         page.wait_for_timeout(1800)
         head = page.inner_text("body")[:800].lower()
         if "robot" in head and ("vérification" in head or "verify" in head or "captcha" in head):
-            raise Blocked("Brave Search asked for a human check")
+            raise Blocked("Brave Search asked for a human check (add a Tavily key in Settings)")
         return page.evaluate(_EXTRACT)
 
     with _throttle:
@@ -48,7 +61,7 @@ def search(query: str, country: str = "", count: int = 10) -> list[dict]:
     out, seen = [], set()
     for it in items:
         host = urllib.parse.urlparse(it["url"]).hostname or ""
-        if SKIP.search(host) or it["url"] in seen:
+        if SKIP.search(host) or it["url"] in seen or (domains and not _on_domain(it["url"], domains)):
             continue
         seen.add(it["url"])
         out.append(it)

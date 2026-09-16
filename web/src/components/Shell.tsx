@@ -1,15 +1,16 @@
-import { LayoutDashboard, Radar, Search, Users } from "lucide-react";
+import { KeyRound, LayoutDashboard, Radar, Search, Users } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useState, type ReactNode } from "react";
 import { fmt, formatDate } from "../lib/data";
 import { EASE, Hud, Kbd } from "./ui";
 
-export type Page = "overview" | "leads" | "searches";
+export type Page = "overview" | "leads" | "searches" | "settings";
 
 const NAV: { id: Page; label: string; icon: typeof Users }[] = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
   { id: "leads", label: "Leads", icon: Users },
   { id: "searches", label: "Searches", icon: Radar },
+  { id: "settings", label: "API keys", icon: KeyRound },
 ];
 
 export function Logo() {

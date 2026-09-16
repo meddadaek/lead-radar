@@ -5,7 +5,8 @@ import uuid
 from . import db
 from .enrich import crawl
 from .http import Blocked, NeedsKey
-from .sources import gmaps, osm, web, websearch
+from . import llm
+from .sources import gmaps, hunter, instagram, osm, tavily, web, websearch
 from .verify import verify_email
 
 _thread: threading.Thread | None = None
@@ -53,9 +54,36 @@ def _doctolib():
 def _websearch():
     res = websearch.search("Centre Dentaire Maréchal Foch Grenoble", "FR", 8)
     relevant = [r for r in res if "dentaire" in (r["url"] + r["title"]).lower()]
+    engine = websearch.engine_name()
     if not res:
-        return "error", "Brave returned nothing"
-    return ("ok" if relevant else "partial"), f"Brave returned {len(res)} results, {len(relevant)} relevant"
+        return ("error" if tavily.available() else "blocked"), f"{engine} returned nothing" + ("" if tavily.available() else " · add a Tavily key in Settings")
+    return ("ok" if relevant else "partial"), f"{engine}: {len(res)} results, {len(relevant)} relevant"
+
+
+def _hunter():
+    r = hunter.domain_search("doctolib.fr", 5)
+    return ("ok", f"{len(r['emails'])} emails · pattern {r['pattern'] or 'unknown'}") if r["emails"] else ("partial", "Key accepted, no emails returned")
+
+
+def _agent():
+    reply = llm.chat([{"role": "user", "content": "Reply with the single word READY."}], max_tokens=5)
+    text = (reply.get("content") or "").strip()
+    return ("ok", f"{llm.model()} answered “{text[:20]}”") if text else ("error", "Model returned an empty reply")
+
+
+def _instagram():
+    try:
+        p = instagram.profile("doctolib")
+        if p:
+            return "ok", f"@{p['username']} · {p['followers']:,} followers · {p['posts']:,} posts (no login)"
+    except Blocked as e:
+        found = web.social_profiles("Doctolib", "Paris", "FR", ["instagram"])
+        if found.get("instagram"):
+            followers = instagram.stats_from_snippet(found.get("instagram_snippet", "")).get("followers")
+            count = f" · {followers:,} followers" if followers else ""
+            return "partial", f"Profile found via search{count} · direct read blocked ({e})"
+        raise
+    return "error", "Profile not found"
 
 
 def _crawl():
@@ -91,8 +119,10 @@ def _social(key):
 
 
 def _reddit():
+    from .sources import reddit
     posts = web.reddit_intent("dentist", "", "US")
-    return ("ok", f"{len(posts)} posts · {posts[0]['title'][:60]}") if posts else ("error", "No posts found")
+    via = "official API" if reddit.available() else websearch.engine_name()
+    return ("ok", f"{len(posts)} posts via {via} · {posts[0]['title'][:60]}") if posts else ("error", f"No posts found via {via}")
 
 
 def _ads():
@@ -102,7 +132,10 @@ def _ads():
 
 def _trustpilot():
     r = web.trustpilot("https://www.amazon.com")
-    return ("ok", f"TrustScore {r['score']} · {r['reviews']:,} reviews") if r else ("error", "No Trustpilot page read")
+    if not r:
+        return "error", "No Trustpilot data read"
+    via = " (from search snippet; page blocks bots)" if r.get("via") else ""
+    return ("partial" if via else "ok"), f"TrustScore {r['score']} · {r['reviews'] or 0:,} reviews{via}"
 
 
 def _apollo():
@@ -121,8 +154,8 @@ TESTS = {
     "OpenStreetMap": _osm, "Google Maps": _gmaps, "Directories": _directories, "Company registry": _registry,
     "Doctolib": _doctolib, "Web search": _websearch, "Website crawl": _crawl, "Website audit": _audit,
     "Domain history": _domain, "LinkedIn": _linkedin, "Apollo": _apollo, "Facebook": _social("facebook"),
-    "Instagram": _social("instagram"), "TikTok": _social("tiktok"), "Reddit": _reddit,
-    "Meta Ad Library": _ads, "Trustpilot": _trustpilot, "Email check": _email,
+    "Instagram": _instagram, "TikTok": _social("tiktok"), "Reddit": _reddit,
+    "Meta Ad Library": _ads, "Trustpilot": _trustpilot, "Email check": _email, "Hunter": _hunter, "AI agent": _agent,
 }
 
 

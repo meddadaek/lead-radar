@@ -13,7 +13,7 @@ import requests
 from ..config import secret
 from ..http import Blocked, NeedsKey, Throttle, get
 from ..known import host_of, norm
-from . import websearch
+from . import reddit, websearch
 from .browser import browser
 
 _registry = Throttle(0.25)
@@ -65,16 +65,16 @@ def domain_history(website: str) -> dict | None:
         return None
     out: dict = {"domain": host}
     try:
-        r = get(f"https://rdap.org/domain/{host}", headers={"Accept": "application/rdap+json"}, timeout=12)
+        r = get(f"https://rdap.org/domain/{host}", headers={"Accept": "application/rdap+json"}, timeout=25)
         if r.status_code == 200:
             for e in r.json().get("events", []):
                 if e.get("eventAction") == "registration":
                     out["registered"] = e.get("eventDate")
     except (requests.RequestException, ValueError):
         pass
-    for _ in range(2):
+    for _ in range(1):  # the Wayback Machine is often slow; treat it as a bonus
         try:
-            r = get("https://web.archive.org/cdx/search/cdx", params={"url": host, "output": "json", "limit": 1, "fl": "timestamp"}, timeout=15)
+            r = get("https://web.archive.org/cdx/search/cdx", params={"url": host, "output": "json", "limit": 1, "fl": "timestamp"}, timeout=10)
             if r.status_code == 200:
                 rows = r.json()
                 if len(rows) > 1:
@@ -88,21 +88,26 @@ def domain_history(website: str) -> dict | None:
 # ---------------------------------------------------------------- social profiles + people (via web search, no login)
 
 PROFILE = {
-    "facebook": re.compile(r"^https?://(?:[a-z]+\.)?facebook\.com/(?!sharer|share|dialog|events|groups|watch|photo)[^?#]+", re.I),
-    "instagram": re.compile(r"^https?://(?:www\.)?instagram\.com/(?!p/|reel/|explore)[A-Za-z0-9._]+/?$", re.I),
-    "tiktok": re.compile(r"^https?://(?:www\.)?tiktok\.com/@[A-Za-z0-9._]+/?$", re.I),
-    "linkedin": re.compile(r"^https?://(?:[a-z]{2,3}\.)?linkedin\.com/company/[^/?#]+", re.I),
+    # only the profile root, never a post, video or photo
+    "facebook": re.compile(r"^(https?://(?:[a-z]+\.)?facebook\.com/(?!sharer|share|dialog|events|groups|watch|photo|reel|story|people|pages/category)[A-Za-z0-9.\-_%]+)/?(?:$|\?|#|videos|posts|photos|about|reviews)", re.I),
+    "instagram": re.compile(r"^(https?://(?:www\.)?instagram\.com/(?!p/|reel/|reels/|explore|stories)[A-Za-z0-9._]+)/?(?:$|\?)", re.I),
+    "tiktok": re.compile(r"^(https?://(?:www\.)?tiktok\.com/@[A-Za-z0-9._]+)/?(?:$|\?)", re.I),
+    "linkedin": re.compile(r"^(https?://(?:[a-z]{2,3}\.)?linkedin\.com/company/[^/?#]+)", re.I),
 }
+SOCIAL_DOMAINS = {"facebook": "facebook.com", "instagram": "instagram.com", "tiktok": "tiktok.com", "linkedin": "linkedin.com"}
 
 
-def social_profiles(name: str, city: str, country: str) -> dict:
-    """One search for all four networks; only keep profiles whose result mentions the business."""
-    q = f'"{name}" {city} (site:facebook.com OR site:instagram.com OR site:tiktok.com OR site:linkedin.com/company)'
+def social_profiles(name: str, city: str, country: str, wanted: list[str] | None = None) -> dict:
+    """Profiles on Facebook / Instagram / TikTok / LinkedIn whose result mentions the business."""
+    keys = wanted or list(PROFILE)
     found: dict = {}
-    for res in websearch.search(q, country, 15):
-        for key, rx in PROFILE.items():
-            if key not in found and rx.match(res["url"]) and _mentions(name, res["title"], res["snippet"]):
-                found[key] = res["url"].split("?")[0].rstrip("/")
+    for res in websearch.search(f"{name} {city}", country, 15, domains=[SOCIAL_DOMAINS[k] for k in keys]):
+        for key in keys:
+            m = PROFILE[key].match(res["url"])
+            if key not in found and m and _mentions(name, res["title"], res["snippet"]):
+                found[key] = m.group(1)
+                if key == "instagram":
+                    found["instagram_snippet"] = res["title"] + " " + res["snippet"]
     return found
 
 
@@ -112,7 +117,7 @@ DECISION = re.compile(r"owner|founder|ceo|director|directeur|directrice|g[ée]ra
 
 def linkedin_people(company: str, city: str, country: str) -> list[dict]:
     people = []
-    for res in websearch.search(f'site:linkedin.com/in "{company}" {city}', country, 10):
+    for res in websearch.search(f"{company} {city}", country, 12, domains=["linkedin.com"]):
         if "linkedin.com/in/" not in res["url"] or not _mentions(company, res["title"], res["snippet"]):
             continue
         title = re.sub(r"\s*[|·]\s*LinkedIn.*$", "", res["title"])
@@ -127,16 +132,25 @@ def doctolib(name: str, city: str, country: str) -> str | None:
     domain = {"FR": "doctolib.fr", "DE": "doctolib.de", "IT": "doctolib.it"}.get(country.upper())
     if not domain:
         return None
-    for res in websearch.search(f'site:{domain} "{name}" {city}', country, 6):
+    for res in websearch.search(f"{name} {city}", country, 6, domains=[domain]):
         if domain in res["url"] and _mentions(name, res["title"], res["snippet"]):
             return res["url"].split("?")[0]
     return None
 
 
 def reddit_intent(niche: str, location: str, country: str) -> list[dict]:
-    q = f'site:reddit.com {niche} ("looking for" OR "recommend" OR "need a" OR "anyone know") {location}'
+    """Posts where people ask for this kind of business: official Reddit API if keys are set, else web search."""
+    if reddit.available():
+        posts = reddit.search(f"{niche} {location}".strip()) + reddit.search(f"{niche} recommend")
+        seen, out = set(), []
+        for p in posts:
+            if p["url"] not in seen:
+                seen.add(p["url"])
+                out.append(p)
+        return out[:8]
     return [{"title": r["title"], "url": r["url"], "snippet": r["snippet"][:200]}
-            for r in websearch.search(q, country, 10) if "reddit.com/r/" in r["url"]][:6]
+            for r in websearch.search(f"{niche} {location} recommend looking for", country, 10, domains=["reddit.com"])
+            if "/r/" in r["url"]][:6]
 
 
 # ---------------------------------------------------------------- directories
@@ -197,7 +211,11 @@ def meta_ads(name: str, country: str) -> dict | None:
            + "&q=" + urllib.parse.quote(f'"{name}"') + "&search_type=keyword_exact_phrase&media_type=all")
 
     def job(page):
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        page.goto(url, wait_until="commit", timeout=60000)
+        try:
+            page.wait_for_selector("text=/results?|No ads match|Ad Library/i", timeout=35000)
+        except Exception as e:  # noqa: BLE001
+            raise Blocked("Meta Ad Library did not load (slow or blocked)") from e
         for label in ("Decline optional cookies", "Only allow essential cookies", "Refuser les cookies optionnels"):
             b = page.get_by_role("button", name=label)
             if b.count():
@@ -246,7 +264,19 @@ def trustpilot(website: str) -> dict | None:
                            for r in reviews if (r.get("rating") or 5) <= 2][:3],
         }
 
-    return browser.run(job, timeout=70)
+    try:
+        return browser.run(job, timeout=70)
+    except Blocked:
+        # Trustpilot blocks headless browsers; its search snippet still carries the score and review count.
+        for res in websearch.search(f"{host} reviews", "", 5, domains=["trustpilot.com"]):
+            if host.split(".")[0] in res["url"].lower():
+                text = res["title"] + " " + res["snippet"]
+                score = re.search(r"TrustScore\s*(?:of\s*)?(\d(?:[.,]\d)?)", text, re.I)
+                count = re.search(r"([\d,.\s]+)\s*(?:reviews|avis)", text, re.I)
+                return {"url": res["url"], "score": float(score.group(1).replace(",", ".")) if score else None,
+                        "reviews": int(re.sub(r"\D", "", count.group(1)) or 0) if count else None,
+                        "complaints": [], "via": "search snippet"}
+        return None
 
 
 # ---------------------------------------------------------------- Apollo (needs the user's own API key)

@@ -1,12 +1,12 @@
-import { Check, Copy, ExternalLink, Globe, Mail, MapPin, MessageCircle, Minus, Phone, X } from "lucide-react";
+import { Check, Copy, ExternalLink, Globe, Mail, MapPin, MessageCircle, Minus, Phone, RotateCw, Sparkles, X } from "lucide-react";
 import { AnimatePresence, motion, type Variants } from "motion/react";
 import { useEffect, useState, type ReactNode } from "react";
-import { COUNTRIES, EMAIL_LABEL, EMAIL_TONE, SOURCE_GROUPS, STATUS_LABEL, formatDate, store } from "../lib/data";
-import type { Audit, Lead, OutreachStatus } from "../lib/types";
-import { CountryCode, EASE, Hud, Pill, SCORE_COLOR, ScoreRing } from "./ui";
+import { COUNTRIES, EMAIL_LABEL, EMAIL_TONE, SOURCE_GROUPS, STATUS_LABEL, engine, formatDate, store } from "../lib/data";
+import type { Audit, Lead, OutreachStatus, ResearchJob } from "../lib/types";
+import { Button, CountryCode, EASE, Hud, Pill, SCORE_COLOR, ScoreRing } from "./ui";
 import { scoreTone } from "../lib/data";
 
-export function LeadDrawer({ lead, onClose }: { lead: Lead | null; onClose: () => void }) {
+export function LeadDrawer({ lead, onClose, onChanged }: { lead: Lead | null; onClose: () => void; onChanged: () => void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -29,7 +29,7 @@ export function LeadDrawer({ lead, onClose }: { lead: Lead | null; onClose: () =
             initial={{ x: "110%", opacity: 0.6 }} animate={{ x: 0, opacity: 1 }} exit={{ x: "110%", opacity: 0.6 }}
             transition={{ type: "spring", stiffness: 300, damping: 34 }}
           >
-            <DrawerBody key={lead.id} lead={lead} onClose={onClose} />
+            <DrawerBody key={lead.id} lead={lead} onClose={onClose} onChanged={onChanged} />
           </motion.aside>
         </>
       )}
@@ -110,7 +110,85 @@ const STATUSES: OutreachStatus[] = ["new", "contacted", "replied", "won", "not_i
 const link = "text-text underline decoration-white/20 underline-offset-[3px] transition hover:decoration-accent";
 const TONE_VAR: Record<string, string> = { good: "var(--good)", warn: "var(--warn)", bad: "var(--bad)", neutral: "var(--faint)" };
 
-function DrawerBody({ lead, onClose }: { lead: Lead; onClose: () => void }) {
+function AgentResearch({ lead, onChanged }: { lead: Lead; onChanged: () => void }) {
+  const [job, setJob] = useState<ResearchJob | null>(null);
+  const [error, setError] = useState("");
+  const running = job?.state === "running";
+
+  useEffect(() => {
+    engine.researchStatus(lead.id).then(setJob).catch(() => undefined);
+  }, [lead.id]);
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(async () => {
+      try {
+        const j = await engine.researchStatus(lead.id);
+        setJob(j);
+        if (j.state !== "running") onChanged();
+      } catch {
+        /* keep polling */
+      }
+    }, 1500);
+    return () => clearInterval(t);
+  }, [running, lead.id, onChanged]);
+
+  return (
+    <motion.section variants={item} className="relative mx-4 mb-3 overflow-hidden rounded-2xl border border-violet/30 bg-violet/[0.05] px-4 py-3.5">
+      {running && <div className="scanline pointer-events-none absolute inset-0" />}
+      <div className="flex items-center justify-between gap-3">
+        <Hud accent>AI research</Hud>
+        <Button
+          variant={lead.agent ? "ghost" : "primary"}
+          disabled={running}
+          onClick={async () => {
+            setError("");
+            try {
+              await engine.research(lead.id);
+              setJob({ state: "running", steps: [] });
+            } catch (e) {
+              setError((e as Error).message);
+            }
+          }}
+        >
+          {running ? <RotateCw className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+          {running ? "Researching…" : lead.agent ? "Research again" : "Research with AI"}
+        </Button>
+      </div>
+      {!job?.steps.length && !lead.agent && !error && (
+        <p className="mt-2 text-[12.5px] text-muted">The agent searches the web for the owner, direct emails and official profiles, keeps only what its sources show, then confirms each email with the mail server.</p>
+      )}
+      {error && <p className="mt-2 text-[12px] text-bad">{error}</p>}
+      {lead.angle && (
+        <div className="mt-3 rounded-xl border border-line bg-black/25 px-3 py-2.5">
+          <Hud>Outreach angle</Hud>
+          <p className="mt-1 text-[13px] leading-relaxed">{lead.angle}</p>
+        </div>
+      )}
+      {(job?.steps.length ?? 0) > 0 && (
+        <ul className="scroll-thin mt-3 max-h-44 space-y-1 overflow-y-auto font-mono text-[11px]">
+          {job!.steps.map((s, i) => (
+            <motion.li key={i} initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }}
+              className={s.kind === "done" ? "text-good" : s.kind === "error" || s.kind === "warn" ? "text-warn" : s.kind === "verify" ? "text-cyan" : "text-muted"}>
+              › {s.text}
+            </motion.li>
+          ))}
+        </ul>
+      )}
+      {lead.agent && (
+        <details className="mt-2 text-[11px] text-faint">
+          <summary className="cursor-pointer hover:text-muted">Sources the agent read · {lead.agent.model} · {formatDate(lead.agent.researched_at)}</summary>
+          <ul className="mt-1 space-y-0.5">
+            {lead.agent.evidence.map((u) => (
+              <li key={u} className="truncate"><a className="hover:text-text" href={u} target="_blank" rel="noreferrer">{u}</a></li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </motion.section>
+  );
+}
+
+function DrawerBody({ lead, onClose, onChanged }: { lead: Lead; onClose: () => void; onChanged: () => void }) {
   const [note, setNote] = useState(lead.outreach.note);
   useEffect(() => {
     if (note === lead.outreach.note) return;
@@ -355,6 +433,23 @@ function DrawerBody({ lead, onClose }: { lead: Lead; onClose: () => void }) {
         </Section>
 
         <Section title="Social & ads">
+          {lead.instagram && (lead.instagram.followers != null || lead.instagram.posts != null) && (
+            <div className="mb-2 grid grid-cols-3 gap-2">
+              <div className="rounded-xl border border-line bg-black/20 p-3">
+                <Hud>Instagram</Hud>
+                <div className="mt-1 font-mono text-lg">{lead.instagram.followers != null ? lead.instagram.followers.toLocaleString("en-US") : "–"}</div>
+                <div className="text-[10px] text-faint">followers</div>
+              </div>
+              <div className="rounded-xl border border-line bg-black/20 p-3">
+                <Hud>Posts</Hud>
+                <div className="mt-1 font-mono text-lg">{lead.instagram.posts ?? "–"}</div>
+              </div>
+              <div className="rounded-xl border border-line bg-black/20 p-3">
+                <Hud>Category</Hud>
+                <div className="mt-1 truncate text-[12px] text-muted" title={lead.instagram.bio}>{lead.instagram.category || (lead.instagram.via ? "from search" : "—")}</div>
+              </div>
+            </div>
+          )}
           {Object.keys(lead.socials).length > 0 ? (
             Object.entries(lead.socials).map(([k, v]) => (
               <Row key={k} label={k[0].toUpperCase() + k.slice(1)}>
@@ -370,6 +465,8 @@ function DrawerBody({ lead, onClose }: { lead: Lead; onClose: () => void }) {
             {lead.ads ? <Pill tone="accent">Running ads now</Pill> : <span className="text-faint">Not checked yet</span>}
           </Row>
         </Section>
+
+        <AgentResearch lead={lead} onChanged={onChanged} />
 
         <Section title="Verification" aside={<span className="font-mono text-[10px] text-faint">nothing was sent</span>}>
           {(lead.checks?.emails.length ?? 0) === 0 && (lead.checks?.phones.length ?? 0) === 0 ? (

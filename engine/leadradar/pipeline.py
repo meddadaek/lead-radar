@@ -3,12 +3,12 @@ import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import db, niches
+from . import agent, db, llm, niches
 from .enrich import crawl, site_matches
 from .http import Blocked, NeedsKey
 from .known import FREEMAIL, archive, host_of, keys_for, norm
 from .score import score
-from .sources import gmaps, osm, web, websearch
+from .sources import gmaps, hunter, instagram, osm, web, websearch
 from .verify import verify_email, verify_phone
 
 NOT_A_WEBSITE = re.compile(
@@ -208,6 +208,17 @@ class Run:
                         db.log(self.sid, "warn", f"A business check failed: {str(e)[:140]}")
                     self.emit(pct=22 + int(76 * i / len(futures)), checked=1)
 
+        if self.has("AI agent") and llm.available():
+            mine = sorted((l for l in db.all_leads() if l.get("search_id") == self.sid and "AI agent" not in l["sources"]),
+                          key=lambda l: -l["score"])[:5]
+            if mine:
+                self.emit("agent", 98, f"AI agent: researching the top {len(mine)} leads")
+            for l in mine:
+                job = agent.research(l["id"], log=lambda t, n=l["name"]: db.log(self.sid, "agent", f"AI · {n}: {t}"))
+                if job["state"] == "error":
+                    self.fail("AI agent", RuntimeError(job["error"]))
+                    break
+
         s = self.progress
         self.emit("done", 100, f"Done: {s['saved']} leads saved ({s['new']} new) · {s['emails_valid']} verified emails · "
                                f"{s['phones_valid']} valid phones · {s['no_contact']} dropped without a confirmed contact",
@@ -267,9 +278,17 @@ class Run:
             self.emit(known=1, msg=f"– {name}: already in a past campaign", level="skip")
             return
 
-        # ---- confirm emails (own-domain addresses first)
+        # ---- more email candidates: Hunter for the domain when the site itself shows none
         host = host_of(website)
-        emails = list(dict.fromkeys([e.lower() for e in c["emails"]] + site_emails))
+        hunter_hits: list[dict] = []
+        if host and not site_emails and not c["emails"] and self.has("Hunter"):
+            found = self.safe("Hunter", hunter.domain_search, host) or {}
+            hunter_hits = sorted(found.get("emails", []), key=lambda e: -(e.get("confidence") or 0))[:3]
+            if hunter_hits:
+                sources.append("Hunter")
+
+        # ---- confirm emails (own-domain addresses first)
+        emails = list(dict.fromkeys([e.lower() for e in c["emails"]] + site_emails + [h["address"] for h in hunter_hits]))
         emails.sort(key=lambda e: 0 if host and e.endswith("@" + host) else 1 if FREEMAIL.match(e.split("@")[-1]) else 2)
         if self.has("Email check"):
             checks = [verify_email(e) for e in emails[:3]]
@@ -337,14 +356,29 @@ class Run:
             if dom:
                 lead["domain"] = dom
                 sources.append("Domain history")
-        wanted = [n for n, k in (("Facebook", "facebook"), ("Instagram", "instagram"), ("TikTok", "tiktok"), ("LinkedIn", "linkedin")) if self.has(n) and k not in socials]
-        if wanted and self.take_search(wanted[0]):
-            found = self.safe(wanted[0], web.social_profiles, name, city, cc) or {}
+        wanted = [(n, k) for n, k in (("Facebook", "facebook"), ("Instagram", "instagram"), ("TikTok", "tiktok"), ("LinkedIn", "linkedin")) if self.has(n) and k not in socials]
+        ig_snippet = ""
+        if wanted and self.take_search(wanted[0][0]):
+            found = self.safe(wanted[0][0], web.social_profiles, name, city, cc, [k for _, k in wanted]) or {}
+            ig_snippet = found.pop("instagram_snippet", "")
             for k, v in found.items():
                 socials.setdefault(k, v)
         for n, k in (("Facebook", "facebook"), ("Instagram", "instagram"), ("TikTok", "tiktok")):
             if k in socials:
                 sources.append(n)
+        if socials.get("instagram") and self.has("Instagram"):
+            ig = self.safe("Instagram", instagram.profile, socials["instagram"])
+            if ig is None and ig_snippet:
+                ig = {"url": socials["instagram"], **instagram.stats_from_snippet(ig_snippet), "via": "search snippet"}
+            if ig:
+                lead["instagram"] = ig
+                for e in ig.get("emails", []):
+                    if e not in {x["address"] for x in checks} and self.has("Email check"):
+                        v = verify_email(e)
+                        checks.append(v)
+                        if v["verdict"] == "valid" and lead["email_status"] != "valid":
+                            lead["other_emails"] = [x for x in [lead["email"], *lead["other_emails"]] if x]
+                            lead["email"], lead["email_status"], lead["mx"] = v["address"], "valid", v["mx"]
         people = self.safe("LinkedIn", web.linkedin_people, name, city, cc) if self.take_search("LinkedIn") else None
         if people or "linkedin" in socials:
             lead["people"] += people or []

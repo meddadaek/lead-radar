@@ -68,6 +68,15 @@ def save_lead(lead: dict, keys, search_id: str) -> bool:
         return new
 
 
+def get_lead(lead_id: str) -> dict | None:
+    row = _q("SELECT data FROM leads WHERE id=?", (lead_id,)).fetchone()
+    return json.loads(row["data"]) if row else None
+
+
+def update_lead(lead: dict):
+    _q("UPDATE leads SET data=?, updated_at=? WHERE id=?", (json.dumps(lead, ensure_ascii=False), now(), lead["id"]), commit=True)
+
+
 def all_leads() -> list[dict]:
     return [json.loads(r["data"]) for r in _q("SELECT data FROM leads ORDER BY found_at DESC")]
 
