@@ -6,6 +6,7 @@ nothing. Nothing here logs in anywhere or needs a card.
 """
 import json
 import re
+import time
 import urllib.parse
 
 import requests
@@ -16,7 +17,7 @@ from ..known import host_of, norm
 from . import reddit, websearch
 from .browser import browser
 
-_registry = Throttle(0.25)
+_registry = Throttle(0.5)
 
 
 def _mentions(name: str, *texts: str) -> bool:
@@ -33,8 +34,12 @@ def company_registry(name: str, country: str, postcode: str = "", city: str = ""
     params = {"q": name, "per_page": 5}
     if postcode:
         params["code_postal"] = postcode
-    with _registry:
-        r = get("https://recherche-entreprises.api.gouv.fr/search", params=params, headers={"Accept": "application/json"})
+    for attempt in range(3):
+        with _registry:
+            r = get("https://recherche-entreprises.api.gouv.fr/search", params=params, headers={"Accept": "application/json"})
+        if r.status_code != 429:
+            break
+        time.sleep(2 * (attempt + 1))
     if r.status_code == 429:
         raise Blocked("registry rate limit")
     if r.status_code != 200:

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { AgentPlan, ApiKey, EmailStatus, EngineSearch, Lead, LeadsFile, OutreachStatus, ResearchJob, SourceHealth } from "./types";
+import type { AgentPlan, ApiKey, ChatJob, EmailStatus, EngineSearch, Lead, LeadsFile, OutreachStatus, ResearchJob, SourceHealth } from "./types";
 
 /* ------------------------------------------------------------------ labels */
 
@@ -104,6 +104,9 @@ export const engine = {
   plan: (request: string) => api<AgentPlan>("/api/agent/plan", { method: "POST", body: JSON.stringify({ request }) }),
   research: (id: string) => api<{ started: boolean }>(`/api/leads/${id}/research`, { method: "POST" }),
   researchStatus: (id: string) => api<ResearchJob>(`/api/leads/${id}/research`),
+  chat: (messages: { role: string; content: string }[], statuses: Record<string, string>) =>
+    api<{ job_id: string }>("/api/agent/chat", { method: "POST", body: JSON.stringify({ messages, statuses }) }),
+  chatStatus: (jobId: string) => api<ChatJob>(`/api/agent/chat/${jobId}`),
 };
 
 /** Engine status, polled. `running` lists search ids in progress. */

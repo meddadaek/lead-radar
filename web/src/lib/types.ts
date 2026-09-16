@@ -107,6 +107,39 @@ export interface AgentPlan {
   model: string;
 }
 
+export interface LeadBrief {
+  id: string;
+  name: string;
+  niche: string;
+  city: string;
+  country: string;
+  score: number;
+  email: string;
+  email_status: EmailStatus;
+  phone: string;
+  website: string;
+  status: OutreachStatus;
+  decision_maker?: string;
+}
+
+export type UiAction =
+  | { type: "navigate"; page: "overview" | "leads" | "searches" | "settings" }
+  | { type: "open_lead"; lead_id: string }
+  | { type: "filter_leads"; filters: Record<string, string | number> }
+  | { type: "set_status"; lead_ids: string[]; status: OutreachStatus };
+
+export interface ChatJob {
+  id: string;
+  state: "running" | "done" | "error";
+  steps: { ts: string; kind: string; text: string }[];
+  tools: string[];
+  reply: string;
+  ui: UiAction[];
+  leads: LeadBrief[];
+  error: string | null;
+  model?: string;
+}
+
 export interface ResearchJob {
   state: "idle" | "running" | "done" | "error";
   steps: { ts: string; kind: string; text: string }[];

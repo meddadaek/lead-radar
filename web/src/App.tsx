@@ -1,5 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
+import { AgentChat } from "./components/AgentChat";
 import { Boot } from "./components/Boot";
 import { CommandPalette } from "./components/CommandPalette";
 import { LeadDrawer } from "./components/LeadDrawer";
@@ -115,6 +116,18 @@ export default function App() {
       )}
 
       <LeadDrawer lead={leads.find((l) => l.id === openId) ?? null} onClose={closeDrawer} onChanged={reload} />
+      {booted && (
+        <AgentChat
+          onNavigate={navigate}
+          onOpenLead={(id) => {
+            reload();
+            setOpenId(id);
+          }}
+          onFilter={(f) => filterAndGo(f as Partial<Filters>)}
+          onLeadsChanged={reload}
+          drawerOpen={!!openId}
+        />
+      )}
       <CommandPalette open={palette} onClose={closePalette} leads={leads} onOpenLead={setOpenId} onNavigate={navigate} onHotLeads={hotLeads} />
     </>
   );

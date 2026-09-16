@@ -17,7 +17,8 @@ export function Boot({ file }: { file: LeadsFile | null }) {
     <motion.div
       key="boot"
       className="fixed inset-0 z-[3000] grid place-items-center bg-bg"
-      exit={{ opacity: 0, scale: 1.06, filter: "blur(14px)" }}
+      // pointerEvents switches off instantly, so the app is clickable even if the fade is paused in a background tab
+      exit={{ opacity: 0, scale: 1.06, filter: "blur(14px)", pointerEvents: "none" }}
       transition={{ duration: 0.7, ease: EASE }}
     >
       <div className="pointer-events-none absolute inset-0 overflow-hidden">

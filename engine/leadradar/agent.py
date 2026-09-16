@@ -48,25 +48,19 @@ def plan(request: str) -> dict:
 
 # ---------------------------------------------------------------- lead research
 
-TOOLS = [
-    {"type": "function", "function": {
-        "name": "web_search",
-        "description": "Search the web. Use domains to restrict results, e.g. [\"linkedin.com\"], [\"instagram.com\"], [\"facebook.com\"].",
-        "parameters": {"type": "object", "properties": {
-            "query": {"type": "string"}, "domains": {"type": "array", "items": {"type": "string"}}}, "required": ["query"]}}},
-    {"type": "function", "function": {
-        "name": "read_page",
-        "description": "Read the visible text of one web page (first 6000 characters).",
-        "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}},
-]
-
-RESEARCH_SYSTEM = """You research ONE business for a web and AI agency's outreach, using the tools.
+# Actions are plain JSON replies rather than native tool calls: Groq's tool-call parser rejects
+# gpt-oss output often enough to break runs, while JSON mode is reliable on every model it serves.
+RESEARCH_SYSTEM = """You research ONE business for a web and AI agency's outreach.
 Never guess. Every person, email and profile you report must appear in a search result or page you saw, with its URL.
 Find: (1) the owner or decision maker (name and role), (2) direct email addresses, (3) official social profiles,
 (4) one short outreach angle based ONLY on the audit facts provided (no invented problems).
-Use at most 6 tool calls, then answer with JSON only:
-{"people":[{"name":"","title":"","source_url":""}],"emails":[{"address":"","source_url":""}],
- "socials":{"linkedin":"","instagram":"","facebook":"","tiktok":""},"angle":""}"""
+
+Each reply is ONE JSON object choosing one action:
+{"action":"web_search","query":"...","domains":["linkedin.com"]}   (domains optional)
+{"action":"read_page","url":"https://..."}
+{"action":"final","people":[{"name":"","title":"","source_url":""}],"emails":[{"address":"","source_url":""}],
+ "socials":{"linkedin":"","instagram":"","facebook":"","tiktok":""},"angle":""}
+Use at most 6 searches or page reads, then reply with the final action."""
 
 _jobs: dict[str, dict] = {}
 
@@ -113,50 +107,48 @@ def research(lead_id: str, job: dict | None = None, log=None) -> dict:
         seen_text: list[str] = []
         data: dict = {}
         step("think", f"Researching {lead['name']} with {llm.model()} · search via {websearch.engine_name()}")
-        for _ in range(7):
-            msg = llm.chat(messages, tools=TOOLS, temperature=0.1, max_tokens=1500)
-            calls = msg.get("tool_calls") or []
-            messages.append({"role": "assistant", "content": msg.get("content") or "", **({"tool_calls": calls} if calls else {})})
-            if not calls:
-                data = llm.parse_json(msg.get("content") or "")
+        for turn in range(8):
+            msg = llm.chat(messages, json_mode=True, temperature=0.1, max_tokens=1500)
+            reply = msg.get("content") or ""
+            args = llm.parse_json(reply)
+            messages.append({"role": "assistant", "content": reply})
+            action = args.get("action")
+            if action == "final" or turn == 7:
+                data = args if action == "final" else {}
                 break
-            for call in calls[:3]:
-                name = call["function"]["name"]
+            if action == "web_search":
+                domains = [d for d in (args.get("domains") or []) if isinstance(d, str)][:4]
+                step("search", f"Searching “{args.get('query', '')}”" + (f" on {', '.join(domains)}" if domains else ""))
                 try:
-                    args = json.loads(call["function"].get("arguments") or "{}")
-                except json.JSONDecodeError:
-                    args = {}
-                if name == "web_search":
-                    domains = [d for d in (args.get("domains") or []) if isinstance(d, str)][:4]
-                    step("search", f"Searching “{args.get('query', '')}”" + (f" on {', '.join(domains)}" if domains else ""))
+                    res = websearch.search(str(args.get("query", "")), lead["country"], 6, domains=domains or None)
+                except Exception as e:  # noqa: BLE001
+                    res = []
+                    step("warn", f"Search failed: {e}")
+                for r in res:
+                    seen_urls.add(r["url"])
+                    seen_text.append(f"{r['url']} {r['title']} {r['snippet']}")
+                # keep what is resent small: Groq's free tier caps tokens per minute
+                brief = [{"url": r["url"], "title": r["title"][:100], "snippet": r["snippet"][:260]} for r in res]
+                content = "Search results: " + json.dumps(brief, ensure_ascii=False)
+            elif action == "read_page":
+                url = str(args.get("url", ""))
+                step("read", f"Reading {url}")
+                final, _, html, _ = fetch(url)
+                text = visible_text(html)[:6000] if html else ""
+                if not text and tavily.available():
                     try:
-                        res = websearch.search(str(args.get("query", "")), lead["country"], 6, domains=domains or None)
-                    except Exception as e:  # noqa: BLE001
-                        res = []
-                        step("warn", f"Search failed: {e}")
-                    for r in res:
-                        seen_urls.add(r["url"])
-                        seen_text.append(f"{r['url']} {r['title']} {r['snippet']}")
-                    content = json.dumps(res, ensure_ascii=False)[:5000]
-                elif name == "read_page":
-                    url = str(args.get("url", ""))
-                    step("read", f"Reading {url}")
-                    final, _, html, _ = fetch(url)
-                    text = visible_text(html)[:6000] if html else ""
-                    if not text and tavily.available():
-                        try:
-                            text = tavily.extract(url)[:6000]
-                        except Exception:  # noqa: BLE001
-                            text = ""
-                    if text:
-                        seen_urls.update({url, final})
-                        seen_text.append(f"{url} {text}")
-                    content = text or "Could not read this page."
-                else:
-                    content = "Unknown tool."
-                messages.append({"role": "tool", "tool_call_id": call["id"], "content": content})
+                        text = tavily.extract(url)[:6000]
+                    except Exception:  # noqa: BLE001
+                        text = ""
+                if text:
+                    seen_urls.update({url, final})
+                    seen_text.append(f"{url} {text}")
+                content = f"Page {url}: " + (text[:2500] if text else "could not be read.")
+            else:
+                content = 'Reply with one JSON object whose "action" is web_search, read_page or final.'
+            messages.append({"role": "user", "content": content})
         if not data:
-            msg = llm.chat(messages + [{"role": "user", "content": "Stop using tools. Reply with the final JSON now."}], json_mode=True)
+            msg = llm.chat(messages + [{"role": "user", "content": 'Stop searching. Reply now with the {"action":"final",...} JSON.'}], json_mode=True)
             data = llm.parse_json(msg.get("content") or "")
 
         # ---- keep only what the agent actually saw

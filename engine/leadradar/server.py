@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import agent, db, health, keys, llm, pipeline
+from . import agent, chat, db, health, keys, llm, pipeline
 from .http import Blocked, NeedsKey
 from .known import archive
 from .sources import websearch
@@ -151,3 +151,29 @@ def research_lead(lead_id: str):
 @app.get("/api/leads/{lead_id}/research")
 def research_status(lead_id: str):
     return agent.status(lead_id) or {"state": "idle", "steps": []}
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str = Field(max_length=4000)
+
+
+class ChatIn(BaseModel):
+    messages: list[ChatMessage] = Field(min_length=1, max_length=40)
+    statuses: dict[str, str] = {}
+
+
+@app.post("/api/agent/chat")
+def agent_chat(body: ChatIn):
+    try:
+        return {"job_id": chat.start([m.model_dump() for m in body.messages], body.statuses)}
+    except Exception as e:  # noqa: BLE001
+        _agent_error(e)
+
+
+@app.get("/api/agent/chat/{job_id}")
+def agent_chat_status(job_id: str):
+    job = chat.status(job_id)
+    if not job:
+        raise HTTPException(404, "Conversation turn not found (the engine may have restarted)")
+    return job
