@@ -110,7 +110,8 @@ body {
 .spot:hover::before, .spot:hover::after { opacity: 1; }
 
 /* corner brackets on HUD panels */
-.brackets { position: relative; }
+/* unlayered CSS beats Tailwind's utilities layer, so never override a `fixed`/`absolute` panel's position */
+.brackets:not(.fixed):not(.absolute) { position: relative; }
 .brackets > .br { position: absolute; width: 10px; height: 10px; border-color: rgba(200, 245, 66, 0.55); pointer-events: none; }
 .brackets > .br.tl { top: -1px; left: -1px; border-top: 1px solid; border-left: 1px solid; border-top-left-radius: 6px; }
 .brackets > .br.tr { top: -1px; right: -1px; border-top: 1px solid; border-right: 1px solid; border-top-right-radius: 6px; }
